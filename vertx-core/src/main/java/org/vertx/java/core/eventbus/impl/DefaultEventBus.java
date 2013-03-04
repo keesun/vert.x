@@ -63,7 +63,7 @@ public class DefaultEventBus implements EventBus {
   private final AtomicInteger seq = new AtomicInteger(0);
   private final String prefix = UUID.randomUUID().toString();
   private final ClusterManager clusterMgr;
-  
+
   public DefaultEventBus(VertxInternal vertx) {
     // Just some dummy server ID
     this.vertx = vertx;
@@ -82,7 +82,7 @@ public class DefaultEventBus implements EventBus {
     this.server = setServer();
     ManagementRegistry.registerEventBus(serverID);
   }
-  
+
   public void send(String address, JsonObject message, final Handler<Message<JsonObject>> replyHandler) {
     sendOrPub(new JsonObjectMessage(true, address, message), replyHandler);
   }
@@ -589,7 +589,7 @@ public class DefaultEventBus implements EventBus {
       }
     });
   }
-	
+
   private static class HandlerHolder {
     final Context context;
     final Handler handler;
@@ -675,14 +675,14 @@ public class DefaultEventBus implements EventBus {
     }
 
     void connect(NetClient client, final ServerID theServerID) {
+      client.exceptionHandler(new Handler<Exception>() {
+	    public void handle(Exception e) {
+		    cleanupConnection(theServerID, ConnectionHolder.this, true);
+	    }
+      });
       client.connect(theServerID.port, theServerID.host, new Handler<NetSocket>() {
         public void handle(final NetSocket socket) {
           connected(theServerID, socket);
-        }
-      });
-      client.exceptionHandler(new Handler<Exception>() {
-        public void handle(Exception e) {
-          cleanupConnection(theServerID, ConnectionHolder.this, true);
         }
       });
     }
