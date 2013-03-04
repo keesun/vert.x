@@ -18,18 +18,7 @@ package org.vertx.java.core.net.impl;
 
 import org.jboss.netty.bootstrap.ClientBootstrap;
 import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.channel.ChannelFutureListener;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.channel.ChannelPipeline;
-import org.jboss.netty.channel.ChannelPipelineFactory;
-import org.jboss.netty.channel.ChannelState;
-import org.jboss.netty.channel.ChannelStateEvent;
-import org.jboss.netty.channel.Channels;
-import org.jboss.netty.channel.ExceptionEvent;
-import org.jboss.netty.channel.MessageEvent;
-import org.jboss.netty.channel.SimpleChannelUpstreamHandler;
+import org.jboss.netty.channel.*;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.channel.socket.nio.NioSocketChannel;
 import org.jboss.netty.handler.ssl.SslHandler;
@@ -51,15 +40,18 @@ import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * @author <a href="http://tfox.org">Tim Fox</a>
+ */
 public class DefaultNetClient implements NetClient {
 
   private static final Logger log = LoggerFactory.getLogger(DefaultNetClient.class);
 
   private final VertxInternal vertx;
-  private final Context ctx;
+  private final Context actualCtx;
+  private final EventLoopContext eventLoopContext;
   private final TCPSSLHelper tcpHelper = new TCPSSLHelper();
   private ClientBootstrap bootstrap;
-  private NioClientSocketChannelFactory channelFactory;
   private Map<Channel, DefaultNetSocket> socketMap = new ConcurrentHashMap<>();
   private Handler<Exception> exceptionHandler;
   private int reconnectAttempts;
@@ -67,15 +59,23 @@ public class DefaultNetClient implements NetClient {
 
   public DefaultNetClient(VertxInternal vertx) {
     this.vertx = vertx;
-    ctx = vertx.getOrAssignContext();
-    if (vertx.isWorker()) {
-      throw new IllegalStateException("Cannot be used in a worker application");
-    }
-    ctx.putCloseHook(this, new Runnable() {
+    // This is kind of fiddly - this class might be used by a worker, in which case the context is not
+    // an event loop context - but we need an event loop context so that netty can deliver any messages for the connection
+    // Therefore, if the current context is not an event loop one, we need to create one and register that with the
+    // handler manager when registering handlers
+    // We then do a check when messages are delivered that we're on the right worker before delivering the message
+    // All of this will be massively simplified in Netty 4.0 when the event loop becomes a first class citizen
+    actualCtx = vertx.getOrAssignContext();
+    actualCtx.putCloseHook(this, new Runnable() {
       public void run() {
         close();
       }
     });
+    if (actualCtx instanceof EventLoopContext) {
+      eventLoopContext = (EventLoopContext)actualCtx;
+    } else {
+      eventLoopContext = vertx.createEventLoopContext();
+    }
   }
 
   public NetClient connect(int port, String host, final Handler<NetSocket> connectHandler) {
@@ -154,10 +154,6 @@ public class DefaultNetClient implements NetClient {
     return tcpHelper.getConnectTimeout();
   }
 
-  public Integer getBossThreads() {
-    return tcpHelper.getClientBossThreads();
-  }
-
   public NetClient setTCPNoDelay(boolean tcpNoDelay) {
     tcpHelper.setTCPNoDelay(tcpNoDelay);
     return this;
@@ -195,11 +191,6 @@ public class DefaultNetClient implements NetClient {
 
   public NetClient setConnectTimeout(long timeout) {
     tcpHelper.setConnectTimeout(timeout);
-    return this;
-  }
-
-  public NetClient setBossThreads(int threads) {
-    tcpHelper.setClientBossThreads(threads);
     return this;
   }
 
@@ -267,26 +258,16 @@ public class DefaultNetClient implements NetClient {
 
   private void connect(final int port, final String host, final Handler<NetSocket> connectHandler,
                        final int remainingAttempts) {
-
     if (bootstrap == null) {
-
+      // Share the event loop thread to also serve the NetClient's network traffic.
       VertxWorkerPool pool = new VertxWorkerPool();
-      EventLoopContext ectx;
-      if (ctx instanceof EventLoopContext) {
-        //It always will be
-        ectx = (EventLoopContext)ctx;
-      } else {
-        ectx = null;
-      }
-      pool.addWorker(ectx.getWorker());
+      pool.addWorker(eventLoopContext.getWorker());
 
-      Integer bossThreads = tcpHelper.getClientBossThreads();
-      int threads = bossThreads == null ? 1 : bossThreads;
-      channelFactory = new NioClientSocketChannelFactory(
-          vertx.getAcceptorPool(), threads, pool);
+      NioClientSocketChannelFactory channelFactory = new NioClientSocketChannelFactory(
+          vertx.getClientAcceptorPool(), pool);
       bootstrap = new ClientBootstrap(channelFactory);
 
-      tcpHelper.checkSSL();
+      tcpHelper.checkSSL(vertx);
 
       bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
         public ChannelPipeline getPipeline() throws Exception {
@@ -331,9 +312,8 @@ public class DefaultNetClient implements NetClient {
           }
         } else {
           if (remainingAttempts > 0 || remainingAttempts == -1) {
-            tcpHelper.runOnCorrectThread(ch, new Runnable() {
+            actualCtx.execute(new Runnable() {
               public void run() {
-                Context.setContext(ctx);
                 log.debug("Failed to create connection. Will retry in " + reconnectInterval + " milliseconds");
                 //Set a timer to retry connection
                 vertx.setTimer(reconnectInterval, new Handler<Long>() {
@@ -353,10 +333,9 @@ public class DefaultNetClient implements NetClient {
   }
 
   private void connected(final NioSocketChannel ch, final Handler<NetSocket> connectHandler) {
-    tcpHelper.runOnCorrectThread(ch, new Runnable() {
+    actualCtx.execute(new Runnable() {
       public void run() {
-        Context.setContext(ctx);
-        DefaultNetSocket sock = new DefaultNetSocket(vertx, ch, ctx);
+        DefaultNetSocket sock = new DefaultNetSocket(vertx, ch, actualCtx);
         socketMap.put(ch, sock);
         connectHandler.handle(sock);
       }
@@ -364,10 +343,10 @@ public class DefaultNetClient implements NetClient {
   }
 
   private void failed(NioSocketChannel ch, final Throwable t) {
+  	ch.close();
     if (t instanceof Exception && exceptionHandler != null) {
-      tcpHelper.runOnCorrectThread(ch, new Runnable() {
+      actualCtx.execute(new Runnable() {
         public void run() {
-          Context.setContext(ctx);
           exceptionHandler.handle((Exception) t);
         }
       });
@@ -387,7 +366,7 @@ public class DefaultNetClient implements NetClient {
       final NioSocketChannel ch = (NioSocketChannel) e.getChannel();
       final DefaultNetSocket sock = socketMap.remove(ch);
       if (sock != null) {
-        tcpHelper.runOnCorrectThread(ch, new Runnable() {
+        sock.getContext().execute(new Runnable() {
           public void run() {
             sock.handleClosed();
           }
@@ -396,11 +375,21 @@ public class DefaultNetClient implements NetClient {
     }
 
     @Override
-    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
-      DefaultNetSocket sock = socketMap.get(ctx.getChannel());
+    public void messageReceived(ChannelHandlerContext chctx, MessageEvent e) {
+      final DefaultNetSocket sock = socketMap.get(chctx.getChannel());
       if (sock != null) {
-        ChannelBuffer cb = (ChannelBuffer) e.getMessage();
-        sock.handleDataReceived(new Buffer(cb));
+        final ChannelBuffer cb = (ChannelBuffer) e.getMessage();
+        NioSocketChannel ch = (NioSocketChannel) e.getChannel();
+        // We need to do this since it's possible the server is being used from a worker context
+        if (actualCtx.isOnCorrectWorker(ch.getWorker())) {
+          sock.handleDataReceived(new Buffer(cb));
+        } else {
+          actualCtx.execute(new Runnable() {
+            public void run() {
+              sock.handleDataReceived(new Buffer(cb));
+            }
+          });
+        }
       }
     }
 
@@ -410,7 +399,7 @@ public class DefaultNetClient implements NetClient {
       final DefaultNetSocket sock = socketMap.get(ch);
       ChannelState state = e.getState();
       if (state == ChannelState.INTEREST_OPS) {
-        tcpHelper.runOnCorrectThread(ch, new Runnable() {
+        actualCtx.execute(new Runnable() {
           public void run() {
             sock.handleInterestedOpsChanged();
           }
@@ -424,7 +413,7 @@ public class DefaultNetClient implements NetClient {
       final NetSocket sock = socketMap.remove(ch);
       final Throwable t = e.getCause();
       if (sock != null && t instanceof Exception) {
-        tcpHelper.runOnCorrectThread(ch, new Runnable() {
+        actualCtx.execute(new Runnable() {
           public void run() {
             sock.handleException((Exception) t);
             ch.close();

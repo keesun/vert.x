@@ -19,23 +19,24 @@ package org.vertx.java.core.json;
 import org.vertx.java.core.http.impl.ws.Base64;
 import org.vertx.java.core.json.impl.Json;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
- *
+ * 
  * Represents a JSON object
- *
+ * 
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
-public class JsonObject {
+public class JsonObject extends JsonElement {
 
   final Map<String, Object> map;
 
   /**
    * Create a JSON object based on the specified Map
+   * 
    * @param map
    */
   public JsonObject(Map<String, Object> map) {
@@ -46,12 +47,14 @@ public class JsonObject {
    * Create an empty JSON object
    */
   public JsonObject() {
-    this.map = new HashMap<>();
+    this.map = new LinkedHashMap<>();
   }
 
   /**
    * Create a JSON object from a string form of a JSON object
-   * @param jsonString The string form of a JSON object
+   * 
+   * @param jsonString
+   *          The string form of a JSON object
    */
   @SuppressWarnings("unchecked")
   public JsonObject(String jsonString) {
@@ -73,6 +76,14 @@ public class JsonObject {
     return this;
   }
 
+  public JsonObject putElement(String fieldName, JsonElement value) {
+    if(value.isArray()){
+      return this.putArray(fieldName, value.asArray());
+    }
+    
+    return this.putObject(fieldName, value.asObject());
+  }
+
   public JsonObject putNumber(String fieldName, Number value) {
     map.put(fieldName, value);
     return this;
@@ -89,7 +100,7 @@ public class JsonObject {
   }
 
   public String getString(String fieldName) {
-    return (String)map.get(fieldName);
+    return (String) map.get(fieldName);
   }
 
   @SuppressWarnings("unchecked")
@@ -104,26 +115,37 @@ public class JsonObject {
     return l == null ? null : new JsonArray(l);
   }
 
+  public JsonElement getElement(String fieldName) {
+    Object element = map.get(fieldName);
+    if (element instanceof Map<?,?>){
+      return this.getObject(fieldName);
+    }
+    if (element instanceof List<?>){
+      return this.getArray(fieldName);
+    }
+    throw new ClassCastException();
+  }
+
   public Number getNumber(String fieldName) {
-    return (Number)map.get(fieldName);
+    return (Number) map.get(fieldName);
   }
 
   public Long getLong(String fieldName) {
-    Number num = (Number)map.get(fieldName);
+    Number num = (Number) map.get(fieldName);
     return num == null ? null : num.longValue();
   }
 
   public Integer getInteger(String fieldName) {
-    Number num = (Number)map.get(fieldName);
+    Number num = (Number) map.get(fieldName);
     return num == null ? null : num.intValue();
   }
 
   public Boolean getBoolean(String fieldName) {
-    return (Boolean)map.get(fieldName);
+    return (Boolean) map.get(fieldName);
   }
 
   public byte[] getBinary(String fieldName) {
-    String encoded = (String)map.get(fieldName);
+    String encoded = (String) map.get(fieldName);
     return Base64.decode(encoded);
   }
 
@@ -140,6 +162,11 @@ public class JsonObject {
   public JsonArray getArray(String fieldName, JsonArray def) {
     JsonArray arr = getArray(fieldName);
     return arr == null ? def : arr;
+  }
+
+  public JsonElement getElement(String fieldName, JsonElement def) {
+    JsonElement elem = getElement(fieldName);
+    return elem == null ? def : elem;
   }
 
   public boolean getBoolean(String fieldName, boolean def) {
@@ -194,20 +221,25 @@ public class JsonObject {
     return new JsonObject(encode());
   }
 
+  @Override
   public String toString() {
     return encode();
   }
 
+  @Override
   public boolean equals(Object o) {
-    if (this == o) return true;
+    if (this == o)
+      return true;
 
-    if (o == null || getClass() != o.getClass()) return false;
+    if (o == null || getClass() != o.getClass())
+      return false;
 
     JsonObject that = (JsonObject) o;
 
-    if (this.map.size() != that.map.size()) return false;
+    if (this.map.size() != that.map.size())
+      return false;
 
-    for (Map.Entry<String, Object> entry: this.map.entrySet()) {
+    for (Map.Entry<String, Object> entry : this.map.entrySet()) {
       Object val = entry.getValue();
       if (val == null) {
         if (that.map.get(entry.getKey()) != null) {
@@ -228,8 +260,8 @@ public class JsonObject {
 
   @SuppressWarnings("unchecked")
   static Map<String, Object> convertMap(Map<String, Object> map) {
-    Map<String, Object> converted = new HashMap<>(map.size());
-    for (Map.Entry<String, Object> entry: map.entrySet()) {
+    Map<String, Object> converted = new LinkedHashMap<>(map.size());
+    for (Map.Entry<String, Object> entry : map.entrySet()) {
       Object obj = entry.getValue();
       if (obj instanceof Map) {
         Map<String, Object> jm = (Map<String, Object>) obj;
@@ -243,4 +275,5 @@ public class JsonObject {
     }
     return converted;
   }
+
 }

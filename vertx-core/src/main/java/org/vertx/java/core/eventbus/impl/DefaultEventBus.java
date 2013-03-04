@@ -23,9 +23,9 @@ import org.vertx.java.core.SimpleHandler;
 import org.vertx.java.core.buffer.Buffer;
 import org.vertx.java.core.eventbus.EventBus;
 import org.vertx.java.core.eventbus.Message;
-import org.vertx.java.core.eventbus.impl.hazelcast.HazelcastClusterManager;
 import org.vertx.java.core.impl.Context;
 import org.vertx.java.core.impl.VertxInternal;
+import org.vertx.java.core.impl.management.ManagementRegistry;
 import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
@@ -54,7 +54,6 @@ public class DefaultEventBus implements EventBus {
   private static final Buffer PONG = new Buffer(new byte[] { (byte)1 });
   private static final long PING_INTERVAL = 20000;
   private static final long PING_REPLY_INTERVAL = 20000;
-  public static final int DEFAULT_CLUSTER_PORT = 2550;
   private final VertxInternal vertx;
   private final ServerID serverID;
   private NetServer server;
@@ -63,27 +62,27 @@ public class DefaultEventBus implements EventBus {
   private final ConcurrentMap<String, Handlers> handlerMap = new ConcurrentHashMap<>();
   private final AtomicInteger seq = new AtomicInteger(0);
   private final String prefix = UUID.randomUUID().toString();
-
+  private final ClusterManager clusterMgr;
+  
   public DefaultEventBus(VertxInternal vertx) {
     // Just some dummy server ID
     this.vertx = vertx;
-    this.serverID = new ServerID(DEFAULT_CLUSTER_PORT, "localhost");
+    this.serverID = new ServerID(-1, "localhost");
     this.server = null;
     this.subs = null;
+    this.clusterMgr = null;
+    ManagementRegistry.registerEventBus(serverID);
   }
 
-  public DefaultEventBus(VertxInternal vertx, String hostname) {
-    this(vertx, DEFAULT_CLUSTER_PORT, hostname);
-  }
-
-  public DefaultEventBus(VertxInternal vertx, int port, String hostname) {
+  public DefaultEventBus(VertxInternal vertx, int port, String hostname, ClusterManager clusterManager) {
     this.vertx = vertx;
     this.serverID = new ServerID(port, hostname);
-    ClusterManager mgr = new HazelcastClusterManager(vertx);
-    subs = mgr.getSubsMap("subs");
+    this.clusterMgr = clusterManager;
+    this.subs = clusterMgr.getSubsMap("subs");
     this.server = setServer();
+    ManagementRegistry.registerEventBus(serverID);
   }
-
+  
   public void send(String address, JsonObject message, final Handler<Message<JsonObject>> replyHandler) {
     sendOrPub(new JsonObjectMessage(true, address, message), replyHandler);
   }
@@ -258,26 +257,28 @@ public class DefaultEventBus implements EventBus {
     Context context = vertx.getOrAssignContext();
     Handlers handlers = handlerMap.get(address);
     if (handlers != null) {
-      int size = handlers.list.size();
-      // Requires a list traversal. This is tricky to optimise since we can't use a set since
-      // we need fast ordered traversal for the round robin
-      for (int i = 0; i < size; i++) {
-        HandlerHolder holder = handlers.list.get(i);
-        if (holder.handler == handler) {
-          handlers.list.remove(i);
-          holder.removed = true;
-          if (handlers.list.isEmpty()) {
-            handlerMap.remove(address);
-            if (subs != null && !holder.localOnly) {
-              removeSub(address, serverID, completionHandler);
+      synchronized (handlers) {
+        int size = handlers.list.size();
+        // Requires a list traversal. This is tricky to optimise since we can't use a set since
+        // we need fast ordered traversal for the round robin
+        for (int i = 0; i < size; i++) {
+          HandlerHolder holder = handlers.list.get(i);
+          if (holder.handler == handler) {
+            handlers.list.remove(i);
+            holder.removed = true;
+            if (handlers.list.isEmpty()) {
+              handlerMap.remove(address);
+              if (subs != null && !holder.localOnly) {
+                removeSub(address, serverID, completionHandler);
+              } else if (completionHandler != null) {
+                callCompletionHandler(completionHandler);
+              }
             } else if (completionHandler != null) {
               callCompletionHandler(completionHandler);
             }
-          } else if (completionHandler != null) {
-            callCompletionHandler(completionHandler);
+            getHandlerCloseHook(context).entries.remove(new HandlerEntry(address, handler));
+            return;
           }
-          getHandlerCloseHook(context).entries.remove(new HandlerEntry(address, handler));
-          return;
         }
       }
     }
@@ -287,8 +288,14 @@ public class DefaultEventBus implements EventBus {
     unregisterHandler(address, handler, null);
   }
 
+  @Override
   public void close(Handler<Void> doneHandler) {
-    server.close(doneHandler);
+		if (clusterMgr != null) {
+			clusterMgr.close();
+		}
+		if (server != null) {
+			server.close(doneHandler);
+		}
   }
 
   void sendReply(final ServerID dest, final BaseMessage message, final Handler replyHandler) {
@@ -354,7 +361,6 @@ public class DefaultEventBus implements EventBus {
     try {
       message.sender = serverID;
       if (replyHandler != null) {
-        //message.replyAddress = UUID.randomUUID().toString();
         message.replyAddress = prefix + String.valueOf(seq.incrementAndGet());
         registerHandler(message.replyAddress, replyHandler, null, true, true);
       }
@@ -368,7 +374,7 @@ public class DefaultEventBus implements EventBus {
         if (subs != null) {
           subs.get(message.address, new AsyncResultHandler<ServerIDs>() {
             public void handle(AsyncResult<ServerIDs> event) {
-              if (event.exception == null) {
+              if (event.succeeded()) {
                 ServerIDs serverIDs = event.result;
                 if (!serverIDs.isEmpty()) {
                   sendToSubs(serverIDs, message);
@@ -390,7 +396,7 @@ public class DefaultEventBus implements EventBus {
       // Reset the context id - send can cause messages to be delivered in different contexts so the context id
       // of the current thread can change
       if (context != null) {
-        Context.setContext(context);
+        vertx.setContext(context);
       }
     }
   }
@@ -412,7 +418,7 @@ public class DefaultEventBus implements EventBus {
       if (completionHandler == null) {
         completionHandler = new AsyncResultHandler<Void>() {
           public void handle(AsyncResult<Void> event) {
-            if (event.exception != null) {
+            if (event.failed()) {
               log.error("Failed to remove entry", event.exception);
             }
           }
@@ -444,8 +450,7 @@ public class DefaultEventBus implements EventBus {
   }
 
   private void callCompletionHandler(AsyncResultHandler<Void> completionHandler) {
-    AsyncResult<Void> f = new AsyncResult<>((Void)null);
-    completionHandler.handle(f);
+    AsyncResult<Void> f = new AsyncResult<Void>().setHandler(completionHandler).setResult(null);
   }
 
   private void cleanSubsForServerID(ServerID theServerID) {
@@ -515,7 +520,7 @@ public class DefaultEventBus implements EventBus {
         holder.timeoutID = vertx.setTimer(PING_REPLY_INTERVAL, new Handler<Long>() {
           public void handle(Long timerID) {
             // Didn't get pong in time - consider connection dead
-            log.info("No pong from server " + serverID + " - will consider it dead, timerID: " + timerID + " holder " + holder);
+            log.warn("No pong from server " + serverID + " - will consider it dead, timerID: " + timerID + " holder " + holder);
             cleanupConnection(holder.theServerID, holder, true);
           }
         });
@@ -528,15 +533,15 @@ public class DefaultEventBus implements EventBus {
     subs.remove(subName, theServerID, new AsyncResultHandler<Boolean>() {
       public void handle(AsyncResult<Boolean> event) {
         if (completionHandler != null) {
-          AsyncResult<Void> result;
-          if (event.exception != null) {
-            result = new AsyncResult<>(event.exception);
+          AsyncResult<Void> ar = new AsyncResult<>();
+          if (event.failed()) {
+            ar.setFailure(event.exception);
           } else {
-            result = new AsyncResult<>((Void)null);
+            ar.setResult(null);
           }
-          completionHandler.handle(result);
+          ar.setHandler(completionHandler);
         } else {
-          if (event.exception != null) {
+          if (event.failed()) {
             log.error("Failed to remove subscription", event.exception);
           }
         }
@@ -570,21 +575,21 @@ public class DefaultEventBus implements EventBus {
 
     holder.context.execute(new Runnable() {
       public void run() {
-      // Need to check handler is still there - the handler might have been removed after the message were sent but
-      // before it was received
-      try {
-        if (!holder.removed) {
-          holder.handler.handle(copied);
-        }
-      } finally {
-        if (holder.replyHandler) {
-          unregisterHandler(msg.address, holder.handler);
-        }
-      }
+	      // Need to check handler is still there - the handler might have been removed after the message were sent but
+	      // before it was received
+	      try {
+	        if (!holder.removed) {
+	          holder.handler.handle(copied);
+	        }
+	      } finally {
+	        if (holder.replyHandler) {
+	          unregisterHandler(msg.address, holder.handler);
+	        }
+	      }
       }
     });
   }
-
+	
   private static class HandlerHolder {
     final Context context;
     final Handler handler;
@@ -743,8 +748,6 @@ public class DefaultEventBus implements EventBus {
         unregisterHandler(entry.address, entry.handler);
       }
     }
-
   }
-
 }
 

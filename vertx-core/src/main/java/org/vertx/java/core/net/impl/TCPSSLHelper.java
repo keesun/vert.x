@@ -17,17 +17,12 @@
 package org.vertx.java.core.net.impl;
 
 import org.jboss.netty.channel.FixedReceiveBufferSizePredictor;
-import org.jboss.netty.channel.socket.nio.NioSocketChannel;
 import org.vertx.java.core.file.impl.PathAdjuster;
+import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
-import javax.net.ssl.X509TrustManager;
+import javax.net.ssl.*;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -45,10 +40,11 @@ import java.util.Map;
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public class TCPSSLHelper {
-  
+
   private static final Logger log = LoggerFactory.getLogger(TCPSSLHelper.class);
-  
+
   private boolean ssl;
+  private boolean verifyHost = true;
   private String keyStorePath;
   private String keyStorePassword;
   private String trustStorePath;
@@ -66,31 +62,19 @@ public class TCPSSLHelper {
   private Integer acceptBackLog;
   private Long connectTimeout;
 
-  private Integer clientBossThreads;
-
   private SSLContext sslContext;
 
   public TCPSSLHelper() {
   }
 
-  public void checkSSL() {
+  public void checkSSL(VertxInternal vertx) {
     if (ssl) {
-      sslContext = createContext(keyStorePath, keyStorePassword, trustStorePath, trustStorePassword, trustAll);
+      sslContext = createContext(vertx, keyStorePath, keyStorePassword, trustStorePath, trustStorePassword, trustAll);
     }
   }
 
   public enum ClientAuth {
     NONE, REQUEST, REQUIRED
-  }
-
-  /*
-  Currently Netty does not provide all events for a connection on the same thread - e.g. connection open
-  connection bound etc are provided on the acceptor thread.
-  In vert.x we must ensure all events are executed on the correct event loop for the context
-  This code will go away if Netty acts like a proper event loop.
-   */
-  public void runOnCorrectThread(NioSocketChannel nch, Runnable runnable) {
-    nch.getWorker().executeInIoThread(runnable, false);
   }
 
   public Map<String, Object> generateConnectionOptions(boolean server) {
@@ -157,10 +141,6 @@ public class TCPSSLHelper {
     return trafficClass;
   }
 
-  public Integer getClientBossThreads() {
-    return clientBossThreads;
-  }
-
   public void setTCPNoDelay(Boolean tcpNoDelay) {
     this.tcpNoDelay = tcpNoDelay;
   }
@@ -195,17 +175,12 @@ public class TCPSSLHelper {
     this.trafficClass = trafficClass;
   }
 
-
-  public void setClientBossThreads(Integer clientBossThreads) {
-    if (clientBossThreads < 1) {
-      throw new IllegalArgumentException("clientBossThreads must be >= 1");
-    }
-    this.clientBossThreads = clientBossThreads;
-  }
-
-
   public boolean isSSL() {
     return ssl;
+  }
+
+  public boolean isVerifyHost() {
+    return verifyHost;
   }
 
   public String getKeyStorePath() {
@@ -238,6 +213,10 @@ public class TCPSSLHelper {
 
   public void setSSL(boolean ssl) {
     this.ssl = ssl;
+  }
+
+  public void setVerifyHost(boolean verifyHost) {
+    this.verifyHost = verifyHost;
   }
 
   public void setKeyStorePath(String path) {
@@ -294,19 +273,19 @@ public class TCPSSLHelper {
   If you don't specify a key store, and don't specify a system property no key store will be used
   You can override this by specifying the javax.echo.ssl.keyStore system property
    */
-  public SSLContext createContext(final String ksPath,
+  public SSLContext createContext(VertxInternal vertx, final String ksPath,
                                          final String ksPassword,
                                          final String tsPath,
                                          final String tsPassword,
                                          final boolean trustAll) {
     try {
       SSLContext context = SSLContext.getInstance("TLS");
-      KeyManager[] keyMgrs = ksPath == null ? null : getKeyMgrs(ksPath, ksPassword);
+      KeyManager[] keyMgrs = ksPath == null ? null : getKeyMgrs(vertx, ksPath, ksPassword);
       TrustManager[] trustMgrs;
       if (trustAll) {
         trustMgrs = new TrustManager[]{createTrustAllTrustManager()};
       } else {
-        trustMgrs = tsPath == null ? null : getTrustMgrs(tsPath, tsPassword);
+        trustMgrs = tsPath == null ? null : getTrustMgrs(vertx, tsPath, tsPassword);
       }
       context.init(keyMgrs, trustMgrs, new SecureRandom());
       return context;
@@ -335,23 +314,23 @@ public class TCPSSLHelper {
     };
   }
 
-  private TrustManager[] getTrustMgrs(final String tsPath,
+  private TrustManager[] getTrustMgrs(VertxInternal vertx, final String tsPath,
                                              final String tsPassword) throws Exception {
     TrustManagerFactory fact = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-    KeyStore ts = loadStore(tsPath, tsPassword);
+    KeyStore ts = loadStore(vertx, tsPath, tsPassword);
     fact.init(ts);
     return fact.getTrustManagers();
   }
 
-  private KeyManager[] getKeyMgrs(final String ksPath, final String ksPassword) throws Exception {
+  private KeyManager[] getKeyMgrs(VertxInternal vertx, final String ksPath, final String ksPassword) throws Exception {
     KeyManagerFactory fact = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-    KeyStore ks = loadStore(ksPath, ksPassword);
+    KeyStore ks = loadStore(vertx, ksPath, ksPassword);
     fact.init(ks, ksPassword != null ? ksPassword.toCharArray(): null);
     return fact.getKeyManagers();
   }
 
-  private KeyStore loadStore(String path, final String ksPassword) throws Exception {
-    final String ksPath = PathAdjuster.adjust(path);
+  private KeyStore loadStore(VertxInternal vertx, String path, final String ksPassword) throws Exception {
+    final String ksPath = PathAdjuster.adjust(vertx, path);
     KeyStore ks = KeyStore.getInstance("JKS");
     InputStream in = null;
     try {

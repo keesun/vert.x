@@ -125,12 +125,15 @@ class BaseTransport {
 
   static void setCORS(HttpServerRequest req) {
     String origin = req.headers().get("origin");
-    if (origin == null) {
+    if (origin == null || "null".equals(origin)) {
       origin = "*";
     }
     req.response.headers().put("Access-Control-Allow-Origin", origin);
     req.response.headers().put("Access-Control-Allow-Credentials", "true");
-    req.response.headers().put("Access-Control-Allow-Headers", "Content-Type");
+    String hdr = req.headers().get("Access-Control-Request-Headers");
+    if (hdr != null) {
+      req.response.headers().put("Access-Control-Allow-Headers", hdr);
+    }
   }
 
   static Handler<HttpServerRequest> createInfoHandler(final JsonObject config) {
@@ -139,7 +142,7 @@ class BaseTransport {
       public void handle(HttpServerRequest req) {
         if (log.isTraceEnabled()) log.trace("In Info handler");
         req.response.headers().put("Content-Type", "application/json; charset=UTF-8");
-        req.response.headers().put("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        setNoCacheHeaders(req);
         JsonObject json = new JsonObject();
         json.putBoolean("websocket", websocket);
         json.putBoolean("cookie_needed", config.getBoolean("insert_JSESSIONID"));
@@ -151,6 +154,10 @@ class BaseTransport {
         req.response.end(json.encode());
       }
     };
+  }
+
+  static void setNoCacheHeaders(HttpServerRequest req) {
+    req.response.headers().put("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   }
 
   static Handler<HttpServerRequest> createCORSOptionsHandler(final JsonObject config, final String methods) {

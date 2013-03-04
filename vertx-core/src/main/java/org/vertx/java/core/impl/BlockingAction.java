@@ -46,25 +46,23 @@ public abstract class BlockingAction<T>  {
 
     Runnable runner = new Runnable() {
       public void run() {
-        AsyncResult<T> res;
+        final AsyncResult<T> res = new AsyncResult<>();
         try {
-          final T result = action();
-          res = new AsyncResult<>(result);
+          res.setResult(action());
         } catch (final Exception e) {
-          res = new AsyncResult<>(e);
+          res.setFailure(e);
         }
         if (handler != null) {
-          final AsyncResult<T> theRes = res;
           context.execute(new Runnable() {
             public void run() {
-              handler.handle(theRes);
+              res.setHandler(handler);
             }
           });
         }
       }
     };
 
-    context.executeOnWorker(runner);
+    context.executeOnOrderedWorkerExec(runner);
   }
 
   public abstract T action() throws Exception;

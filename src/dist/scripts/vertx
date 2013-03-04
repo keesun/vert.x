@@ -7,7 +7,13 @@
 ##############################################################################
 
 # Add default JVM options here. You can also use JAVA_OPTS and VERTX_OPTS to pass JVM options to this script.
+
+# If you're deploying and undeploying a lot of verticles with dynamic languages it's recommended to enable GC'ing
+# of generated classes and prevent OOM due to a lot of gc
+# DEFAULT_JVM_OPTS="-XX:+CMSClassUnloadingEnabled -XX:-UseGCOverheadLimit"
 DEFAULT_JVM_OPTS=""
+
+JMX_OPTS="-Dcom.sun.management.jmxremote -Dvertx.management.jmx=true -Dhazelcast.jmx=true"
 
 APP_NAME="vertx"
 APP_BASE_NAME=`basename "$0"`
@@ -47,7 +53,7 @@ if $cygwin ; then
     [ -n "$JAVA_HOME" ] && JAVA_HOME=`cygpath --unix "$JAVA_HOME"`
 fi
 
-# Attempt to set APP_HOME
+# Attempt to set VERTX_HOME
 # Resolve links: $0 may be a link
 PRG="$0"
 # Need this for relative symlinks.
@@ -62,10 +68,10 @@ while [ -h "$PRG" ] ; do
 done
 SAVED="`pwd`"
 cd "`dirname \"$PRG\"`/.."
-APP_HOME="`pwd -P`"
+VERTX_HOME="`pwd -P`"
 cd "$SAVED"
 
-CLASSPATH=$APP_HOME/lib/*:$APP_HOME/conf:$JYTHON_HOME/jython.jar::$JRUBY_HOME/lib/jruby.jar
+CLASSPATH=${CLASSPATH}:${VERTX_HOME}/conf:${VERTX_HOME}/lib/*
 
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
@@ -107,12 +113,12 @@ fi
 
 # For Darwin, add options to specify how the application appears in the dock
 if $darwin; then
-    GRADLE_OPTS="$GRADLE_OPTS \"-Xdock:name=$APP_NAME\" \"-Xdock:icon=$APP_HOME/media/vertx.icns\""
+    GRADLE_OPTS="$GRADLE_OPTS \"-Xdock:name=$APP_NAME\" \"-Xdock:icon=$VERTX_HOME/media/vertx.icns\""
 fi
 
 # For Cygwin, switch paths to Windows format before running java
 if $cygwin ; then
-    APP_HOME=`cygpath --path --mixed "$APP_HOME"`
+    VERTX_HOME=`cygpath --path --mixed "$VERTX_HOME"`
     CLASSPATH=`cygpath --path --mixed "$CLASSPATH"`
 
     # We build the pattern for arguments to be converted via cygpath
@@ -162,6 +168,11 @@ fi
 function splitJvmOpts() {
     JVM_OPTS=("$@")
 }
-eval splitJvmOpts $DEFAULT_JVM_OPTS $JAVA_OPTS $VERTX_OPTS
+eval splitJvmOpts $DEFAULT_JVM_OPTS $JAVA_OPTS $JMX_OPTS $VERTX_OPTS
 
-exec "$JAVACMD" "${JVM_OPTS[@]}" -Djava.util.logging.config.file=$APP_HOME/conf/logging.properties -Djruby.home=$JRUBY_HOME -classpath "$CLASSPATH" org.vertx.java.deploy.impl.cli.Starter "$@"
+exec "$JAVACMD" \
+    "${JVM_OPTS[@]}" \
+    -Djava.util.logging.config.file=${VERTX_JUL_CONFIG:-${VERTX_HOME}/conf/logging.properties} \
+    -Dvertx.home=$VERTX_HOME\
+    -classpath "$CLASSPATH" \
+    org.vertx.java.platform.impl.cli.Starter "$@"

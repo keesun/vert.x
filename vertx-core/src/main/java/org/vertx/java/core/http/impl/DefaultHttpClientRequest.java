@@ -19,12 +19,7 @@ package org.vertx.java.core.http.impl;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
-import org.jboss.netty.handler.codec.http.DefaultHttpRequest;
-import org.jboss.netty.handler.codec.http.HttpHeaders;
-import org.jboss.netty.handler.codec.http.HttpMethod;
-import org.jboss.netty.handler.codec.http.HttpRequest;
-import org.jboss.netty.handler.codec.http.HttpVersion;
+import org.jboss.netty.handler.codec.http.*;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.buffer.Buffer;
 import org.vertx.java.core.http.HttpClient;
@@ -35,9 +30,9 @@ import org.vertx.java.core.impl.LowerCaseKeyMap;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 
 /**
  *
@@ -46,6 +41,27 @@ import java.util.Map;
 public class DefaultHttpClientRequest implements HttpClientRequest {
 
   private static final Logger log = LoggerFactory.getLogger(HttpClient.class);
+
+  private final DefaultHttpClient client;
+  private final HttpRequest request;
+  private final Handler<HttpClientResponse> respHandler;
+  private Handler<Void> continueHandler;
+  private final Context context;
+  private final boolean raw;
+  private boolean chunked;
+  private ClientConnection conn;
+  private Handler<Void> drainHandler;
+  private Handler<Exception> exceptionHandler;
+  private boolean headWritten;
+  private boolean completed;
+  private LinkedList<PendingChunk> pendingChunks;
+  private int pendingMaxSize = -1;
+  private boolean connecting;
+  private boolean writeHead;
+  private long written;
+  private long currentTimeoutTimerId = -1;
+  private Map<String, Object> headers;
+  private boolean exceptionOccurred;
 
   DefaultHttpClientRequest(final DefaultHttpClient client, final String method, final String uri,
                            final Handler<HttpClientResponse> respHandler,
@@ -75,28 +91,8 @@ public class DefaultHttpClientRequest implements HttpClientRequest {
     this.respHandler = respHandler;
     this.context = context;
     this.raw = raw;
+
   }
-
-  private final DefaultHttpClient client;
-  private final HttpRequest request;
-  private final Handler<HttpClientResponse> respHandler;
-  private Handler<Void> continueHandler;
-  private final Context context;
-  private final boolean raw;
-
-  private boolean chunked;
-  private ClientConnection conn;
-  private Handler<Void> drainHandler;
-  private Handler<Exception> exceptionHandler;
-  private boolean headWritten;
-  private boolean completed;
-  private LinkedList<PendingChunk> pendingChunks;
-  private int pendingMaxSize = -1;
-  private boolean connecting;
-  private boolean writeHead;
-  private long written;
-  //private long contentLength = 0;
-  private Map<String, Object> headers;
 
   public DefaultHttpClientRequest setChunked(boolean chunked) {
     check();
@@ -181,9 +177,15 @@ public class DefaultHttpClientRequest implements HttpClientRequest {
     }
   }
 
-  public void exceptionHandler(Handler<Exception> handler) {
+  public void exceptionHandler(final Handler<Exception> handler) {
     check();
-    this.exceptionHandler = handler;
+    this.exceptionHandler = new Handler<Exception>() {
+      @Override
+      public void handle(Exception event) {
+        cancelOutstandingTimeoutTimer();
+        handler.handle(event);
+      }
+    };
   }
 
   public void continueHandler(Handler<Void> handler) {
@@ -238,6 +240,18 @@ public class DefaultHttpClientRequest implements HttpClientRequest {
     }
   }
 
+  @Override
+  public HttpClientRequest setTimeout(final long timeoutMs) {
+    cancelOutstandingTimeoutTimer();
+    currentTimeoutTimerId = client.getVertx().setTimer(timeoutMs, new Handler<Long>() {
+      @Override
+      public void handle(Long event) {
+        handleException(new TimeoutException("The timeout period of " + timeoutMs + "ms has been exceeded"));
+      }
+    });
+    return this;
+  }
+
   void handleDrained() {
     if (drainHandler != null) {
       drainHandler.handle(null);
@@ -245,28 +259,41 @@ public class DefaultHttpClientRequest implements HttpClientRequest {
   }
 
   void handleException(Exception e) {
+    exceptionOccurred = true;
     if (exceptionHandler != null) {
-      exceptionHandler.handle(e);
+      exceptionHandler.handle(e); // the handler cancels the timer.
     } else {
+      cancelOutstandingTimeoutTimer();
       log.error("Unhandled exception", e);
     }
   }
 
   void handleResponse(DefaultHttpClientResponse resp) {
-    try {
-      if (resp.statusCode == 100) {
-        if (continueHandler != null) {
-          continueHandler.handle(null);
+    // If an exception occurred (e.g. a timeout fired) we won't receive the response.
+    if (!exceptionOccurred) {
+      cancelOutstandingTimeoutTimer();
+      try {
+        if (resp.statusCode == 100) {
+          if (continueHandler != null) {
+            continueHandler.handle(null);
+          }
+        } else {
+          respHandler.handle(resp);
         }
-      } else {
-        respHandler.handle(resp);
+      } catch (Throwable t) {
+        if (t instanceof Exception) {
+          handleException((Exception) t);
+        } else {
+          log.error("Unhandled exception", t);
+        }
       }
-    } catch (Throwable t) {
-      if (t instanceof Exception) {
-        handleException((Exception) t);
-      } else {
-        log.error("Unhandled exception", t);
-      }
+    }
+  }
+
+  private void cancelOutstandingTimeoutTimer() {
+    if(currentTimeoutTimerId != -1) {
+      client.getVertx().cancelTimer(currentTimeoutTimerId);
+      currentTimeoutTimerId = -1;
     }
   }
 
@@ -283,7 +310,7 @@ public class DefaultHttpClientRequest implements HttpClientRequest {
             connect();
           }
         }
-      }, context);
+      }, exceptionHandler, context);
 
       connecting = true;
     }

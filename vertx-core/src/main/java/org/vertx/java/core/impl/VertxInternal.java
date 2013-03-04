@@ -16,13 +16,16 @@
 
 package org.vertx.java.core.impl;
 
+
+import org.jboss.netty.channel.socket.nio.NioClientBossPool;
+import org.jboss.netty.channel.socket.nio.NioServerBossPool;
+import org.jboss.netty.util.Timer;
 import org.vertx.java.core.Vertx;
 import org.vertx.java.core.http.impl.DefaultHttpServer;
 import org.vertx.java.core.net.impl.DefaultNetServer;
 import org.vertx.java.core.net.impl.ServerID;
 
 import java.util.Map;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -34,13 +37,15 @@ import java.util.concurrent.ExecutorService;
  */
 public abstract class VertxInternal extends Vertx {
 
-  public abstract Executor getAcceptorPool();
+  public abstract NioServerBossPool getServerAcceptorPool();
+
+  public abstract NioClientBossPool getClientAcceptorPool();
 
   public abstract ExecutorService getBackgroundPool();
 
   public abstract Context startOnEventLoop(Runnable runnable);
 
-  public abstract Context startInBackground(Runnable runnable);
+  public abstract Context startInBackground(Runnable runnable, boolean multiThreaded);
 
   public abstract Context getOrAssignContext();
 
@@ -50,4 +55,21 @@ public abstract class VertxInternal extends Vertx {
 
   public abstract Map<ServerID, DefaultNetServer> sharedNetServers();
 
+  public abstract Timer getTimer();
+
+	/**
+	 * Get the current context
+	 * @return the context
+	 */
+	public abstract Context getContext();
+
+	/**
+	 * Set the current context
+	 */
+  public abstract void setContext(Context context);
+
+  /**
+   * @return event loop context
+   */
+  public abstract EventLoopContext createEventLoopContext();
 }

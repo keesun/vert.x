@@ -20,24 +20,17 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
-import org.jboss.netty.handler.codec.http.DefaultHttpChunk;
-import org.jboss.netty.handler.codec.http.DefaultHttpChunkTrailer;
-import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
-import org.jboss.netty.handler.codec.http.HttpChunk;
-import org.jboss.netty.handler.codec.http.HttpHeaders;
-import org.jboss.netty.handler.codec.http.HttpResponse;
-import org.jboss.netty.handler.codec.http.HttpResponseStatus;
-import org.jboss.netty.handler.codec.http.HttpVersion;
+import org.jboss.netty.handler.codec.http.*;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.buffer.Buffer;
 import org.vertx.java.core.file.impl.PathAdjuster;
 import org.vertx.java.core.http.HttpServerResponse;
 import org.vertx.java.core.impl.LowerCaseKeyMap;
+import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 
 import java.io.File;
-import java.util.HashMap;
 import java.util.Map;
 
 import static org.jboss.netty.handler.codec.http.HttpHeaders.Names;
@@ -48,7 +41,8 @@ import static org.jboss.netty.handler.codec.http.HttpHeaders.Names;
  */
 public class DefaultHttpServerResponse extends HttpServerResponse {
 
-  private static final Logger log = LoggerFactory.getLogger(DefaultHttpServerResponse.class);
+  @SuppressWarnings("unused")
+	private static final Logger log = LoggerFactory.getLogger(DefaultHttpServerResponse.class);
 
   private final ServerConnection conn;
   private final HttpResponse response;
@@ -64,9 +58,11 @@ public class DefaultHttpServerResponse extends HttpServerResponse {
   private ChannelFuture channelFuture;
   private Map<String, Object> headers;
   private Map<String, Object> trailers;
+  private final VertxInternal vertx;
 
-  DefaultHttpServerResponse(ServerConnection conn, HttpVersion version, boolean keepAlive) {
-    this.conn = conn;
+  DefaultHttpServerResponse(final VertxInternal vertx, ServerConnection conn, HttpVersion version, boolean keepAlive) {
+  	this.vertx = vertx;
+  	this.conn = conn;
     this.response = new DefaultHttpResponse(version, HttpResponseStatus.OK);
     this.version = version;
     this.keepAlive = keepAlive;
@@ -209,7 +205,12 @@ public class DefaultHttpServerResponse extends HttpServerResponse {
       } else {
         DefaultHttpChunkTrailer trlrs = new DefaultHttpChunkTrailer();
         for (Map.Entry<String, Object> trailer: trailers.entrySet()) {
-          trlrs.addHeader(trailer.getKey(), trailer.getValue());
+          Object value = trailer.getValue();
+          if (value instanceof Iterable<?>) {
+            trlrs.setHeader(trailer.getKey(), (Iterable<?>) value);
+          } else {
+            trlrs.setHeader(trailer.getKey(), value);
+          }
         }
         channelFuture = conn.write(trlrs);
       }
@@ -244,7 +245,7 @@ public class DefaultHttpServerResponse extends HttpServerResponse {
       throw new IllegalStateException("Head already written");
     }
     checkWritten();
-    File file = new File(PathAdjuster.adjust(filename));
+    File file = new File(PathAdjuster.adjust(vertx, filename));
     if (!file.exists()) {
       sendNotFound();
     } else {
@@ -329,7 +330,12 @@ public class DefaultHttpServerResponse extends HttpServerResponse {
     if (headers != null) {
       for (Map.Entry<String, Object> header: headers.entrySet()) {
         String key = header.getKey();
-        response.setHeader(key, header.getValue());
+        Object value = header.getValue();
+        if (value instanceof Iterable<?>) {
+          response.setHeader(key, (Iterable<?>) value);
+        } else {
+          response.setHeader(key, value);
+        }
       }
     }
   }
@@ -342,9 +348,9 @@ public class DefaultHttpServerResponse extends HttpServerResponse {
           + "body BEFORE sending any data if you are not using HTTP chunked encoding.");
     }
     Object msg = chunked ? new DefaultHttpChunk(chunk) : chunk;
-    ChannelFuture writeFuture = conn.write(msg);
+    channelFuture = conn.write(msg);
     if (doneHandler != null) {
-      conn.addFuture(doneHandler, writeFuture);
+      conn.addFuture(doneHandler, channelFuture);
     }
     return this;
   }

@@ -11,10 +11,12 @@ if "%OS%"=="Windows_NT" setlocal
 @rem Add default JVM options here. You can also use JAVA_OPTS and VERTX_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS=
 
+set JMX_OPTS=-Dcom.sun.management.jmxremote -Dvertx.management.jmx=true -Dhazelcast.jmx=true
+
 set DIRNAME=%~dp0
 if "%DIRNAME%" == "" set DIRNAME=.
 set APP_BASE_NAME=%~n0
-set APP_HOME=%DIRNAME%..
+set VERTX_HOME=%DIRNAME%..
 
 @rem Find java.exe
 if defined JAVA_HOME goto findJavaFromJavaHome
@@ -49,6 +51,9 @@ goto fail
 @rem Add module option to commandline, if VERTX_MODS was set
 if not "%VERTX_MODS%" == "" set VERTX_MODULE_OPTS="-Dvertx.mods=%VERTX_MODS%"
 
+@rem Configure JUL using custom properties file
+if "%VERTX_JUL_CONFIG%" == "" set VERTX_JUL_CONFIG="%VERTX_HOME%\conf\logging.properties"
+
 @rem Get command-line arguments, handling Windowz variants
 
 if not "%OS%" == "Windows_NT" goto win9xME_args
@@ -72,10 +77,10 @@ set CMD_LINE_ARGS=%$
 :execute
 @rem Setup the command line
 
-set CLASSPATH=%APP_HOME%\lib\*;%APP_HOME%\conf;%JYTHON_HOME%\jython.jar;%JRUBY_HOME%\lib\jruby.jar
+set CLASSPATH=%CLASSPATH%;%VERTX_HOME%\lib\*;%VERTX_HOME%\conf
 
 @rem Execute vertx
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %VERTX_OPTS% %VERTX_MODULE_OPTS% -Djruby.home="%JRUBY_HOME%" -Djython.home="%JYTHON_HOME%" -Djava.util.logging.config.file="%APP_HOME%\conf\logging.properties" -classpath "%CLASSPATH%" org.vertx.java.deploy.impl.cli.Starter %CMD_LINE_ARGS%
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JMX_OPTS% %JAVA_OPTS% %VERTX_OPTS% %VERTX_MODULE_OPTS% -Djava.util.logging.config.file="%VERTX_JUL_CONFIG%" -Dvertx.home=%VERTX_HOME% -classpath "%CLASSPATH%" org.vertx.java.platform.impl.cli.Starter %CMD_LINE_ARGS%
 
 :end
 @rem End local scope for the variables with windows NT shell

@@ -24,19 +24,19 @@ import org.vertx.java.core.VertxFactory;
  */
 public class DefaultVertxFactory implements VertxFactory {
 
-	@Override
-	public Vertx createVertx() {
-		return new DefaultVertx();
-	}
+  @Override
+  public Vertx createVertx() {
+    return new DefaultVertx();
+  }
 
-	@Override
-	public Vertx createVertx(String hostname) {
-		return new DefaultVertx(hostname);
-	}
+  @Override
+  public Vertx createVertx(String hostname) {
+    return new DefaultVertx(hostname);
+  }
 
-	@Override
-	public Vertx createVertx(int port, String hostname) {
-		return new DefaultVertx(port, hostname);
-	}
+  @Override
+  public Vertx createVertx(int port, String hostname) {
+    return new DefaultVertx(port, hostname);
+  }
 
 }

@@ -19,13 +19,8 @@
 package org.vertx.java.core.http.impl.ws.hybi08;
 
 import org.jboss.netty.channel.ChannelHandler;
-import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
-import org.jboss.netty.handler.codec.http.HttpHeaders;
+import org.jboss.netty.handler.codec.http.*;
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names;
-import org.jboss.netty.handler.codec.http.HttpRequest;
-import org.jboss.netty.handler.codec.http.HttpResponse;
-import org.jboss.netty.handler.codec.http.HttpResponseStatus;
-import org.jboss.netty.handler.codec.http.HttpVersion;
 import org.vertx.java.core.AsyncResult;
 import org.vertx.java.core.AsyncResultHandler;
 import org.vertx.java.core.http.HttpClientRequest;
@@ -102,13 +97,13 @@ public class Handshake08 implements Handshake {
 
   public void onComplete(HttpClientResponse response, final AsyncResultHandler<Void> doneHandler) throws Exception {
     String challengeResponse = response.headers().get("sec-websocket-accept");
-    AsyncResult<Void> res;
+    AsyncResult<Void> res = new AsyncResult<>();
     if (challenge.verify(challengeResponse)) {
-      res = new AsyncResult<>((Void)null);
+      res.setResult(null);
     } else {
-      res = new AsyncResult<>(new Exception("Invalid websocket handshake response"));
+      res.setFailure(new Exception("Invalid websocket handshake response"));
     }
-    doneHandler.handle(res);
+    res.setHandler(doneHandler);
   }
 
   public ChannelHandler getEncoder(boolean server) {

@@ -88,9 +88,9 @@ class XhrTransport extends BaseTransport {
     rm.postWithRegEx(re, new Handler<HttpServerRequest>() {
       public void handle(final HttpServerRequest req) {
         if (log.isTraceEnabled()) log.trace("XHR, post, " + req.uri);
+        setNoCacheHeaders(req);
         String sessionID = req.params().get("param0");
         Session session = getSession(config.getLong("session_timeout"), config.getLong("heartbeat_period"), sessionID, sockHandler);
-
         session.register(streaming? new XhrStreamingListener(config.getInteger("max_bytes_streaming"), req, session) : new XhrPollingListener(req, session));
       }
     });
@@ -101,17 +101,16 @@ class XhrTransport extends BaseTransport {
     req.bodyHandler(new Handler<Buffer>() {
       public void handle(Buffer buff) {
         String msgs = buff.toString();
-
         if (msgs.equals("")) {
           req.response.statusCode = 500;
           req.response.end("Payload expected.");
           return;
         }
-
         if (!session.handleMessages(msgs)) {
           sendInvalidJSON(req.response);
         } else {
           req.response.headers().put("Content-Type", "text/plain; charset=UTF-8");
+          setNoCacheHeaders(req);
           setJSESSIONID(config, req);
           setCORS(req);
           req.response.statusCode = 204;
@@ -167,12 +166,12 @@ class XhrTransport extends BaseTransport {
       if (log.isTraceEnabled()) log.trace("XHR poll closing listener");
       if (!closed) {
         try {
-          session.resetListener();
+          session.resetListener(true);
           req.response.end();
           req.response.close();
           closed = true;
         } catch (IllegalStateException e) {
-          // Underlying connection might alreadu be closed - that's fine
+          // Underlying connection might already be closed - that's fine
         }
       }
     }
@@ -208,7 +207,7 @@ class XhrTransport extends BaseTransport {
     public void close() {
       if (log.isTraceEnabled()) log.trace("XHR stream closing listener");
       if (!closed) {
-        session.resetListener();
+        session.resetListener(false);
         try {
           req.response.end();
           req.response.close();

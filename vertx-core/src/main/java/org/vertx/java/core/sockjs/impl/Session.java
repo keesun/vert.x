@@ -136,7 +136,10 @@ class Session extends SockJSSocket implements Shareable {
     this.endHandler = endHandler;
   }
 
-  public synchronized void shutdown() {
+  // Actually close the session - when the user calls close() the session actually continues to exist until timeout
+  // Yes, I know it's weird but that's the way SockJS likes it.
+  private void doClose() {
+    super.close(); // We must call this or handlers don't get unregistered and we get a leak
     if (heartbeatID != -1) {
       vertx.cancelTimer(heartbeatID);
     }
@@ -152,6 +155,12 @@ class Session extends SockJSSocket implements Shareable {
     }
   }
 
+  public synchronized void shutdown() {
+    doClose();
+  }
+
+  // When the user calls close() we don't actually close the session - unless it's a websocket one
+  // Yes, SockJS is weird, but it's hard to work out expected server behaviour when there's no spec
   public synchronized void close() {
     if (endHandler != null) {
       endHandler.handle(null);
@@ -166,10 +175,22 @@ class Session extends SockJSSocket implements Shareable {
     return closed;
   }
 
-  synchronized void resetListener() {
+  synchronized void resetListener(boolean setTimer) {
     listener = null;
+    if (setTimer) {
+      setTimer();
+    }
+  }
 
+  private void cancelTimer() {
+    if (timeoutTimerID != -1) {
+      vertx.cancelTimer(timeoutTimerID);
+    }
+  }
+
+  private void setTimer() {
     if (timeout != -1) {
+      cancelTimer();
       timeoutTimerID = vertx.setTimer(timeout, new Handler<Long>() {
         public void handle(Long id) {
           vertx.cancelTimer(heartbeatID);
@@ -196,7 +217,6 @@ class Session extends SockJSSocket implements Shareable {
   }
 
   synchronized void register(final TransportListener lst) {
-
     if (closed) {
       // Closed by the application
       writeClosed(lst);
@@ -208,10 +228,7 @@ class Session extends SockJSSocket implements Shareable {
       lst.close();
     } else {
 
-      if (timeoutTimerID != -1) {
-        vertx.cancelTimer(timeoutTimerID);
-        timeoutTimerID = -1;
-      }
+      cancelTimer();
 
       this.listener = lst;
 
@@ -225,7 +242,7 @@ class Session extends SockJSSocket implements Shareable {
         if (closed) {
           // Could have already been closed by the user
           writeClosed(lst);
-          resetListener();
+          listener = null;
           lst.close();
         } else {
           if (!pendingWrites.isEmpty()) {

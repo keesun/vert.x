@@ -1,3 +1,5 @@
+package resourceload;
+
 /*
  * Copyright 2011 the original author or authors.
  *
@@ -14,7 +16,7 @@
  * limitations under the License.
  */
 
-import org.vertx.java.deploy.Verticle;
+import org.vertx.java.platform.Verticle;
 
 import java.net.URL;
 

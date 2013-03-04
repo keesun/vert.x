@@ -16,6 +16,7 @@
 
 package org.vertx.java.core.impl;
 
+import org.jboss.netty.channel.socket.nio.NioWorker;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
 
@@ -31,29 +32,22 @@ public abstract class Context {
 
   private static final Logger log = LoggerFactory.getLogger(Context.class);
 
-  private static final ThreadLocal<Context> contextTL = new ThreadLocal<>();
-
+  private final VertxInternal vertx;
   private DeploymentHandle deploymentContext;
   private Path pathAdjustment;
-
   private Map<Object, Runnable> closeHooks;
-
   private final ClassLoader tccl;
+  private boolean closed;
+  protected final Executor orderedBgExec;
 
-  protected Context(Executor bgExec) {
-    this.bgExec = bgExec;
+  protected Context(VertxInternal vertx, Executor orderedBgExec) {
+    this.vertx = vertx;
+    this.orderedBgExec = orderedBgExec;
     this.tccl = Thread.currentThread().getContextClassLoader();
   }
 
-  private final Executor bgExec;
-
-  public static void setContext(Context context) {
-    contextTL.set(context);
-    Thread.currentThread().setContextClassLoader(context.tccl);
-  }
-
-  public static Context getContext() {
-    return contextTL.get();
+  public void setTCCL() {
+    Thread.currentThread().setContextClassLoader(tccl);
   }
 
   public void setDeploymentHandle(DeploymentHandle deploymentHandle) {
@@ -106,22 +100,37 @@ public abstract class Context {
 
   public abstract void execute(Runnable handler);
 
-  public void executeOnWorker(final Runnable task) {
-    bgExec.execute(new Runnable() {
-      public void run() {
-        wrapTask(task).run();
-      }
-    });
+  public abstract boolean isOnCorrectWorker(NioWorker worker);
+
+  // This executes the task in the worker pool using the ordered executor of the context
+  // It's used e.g. from BlockingActions
+  protected void executeOnOrderedWorkerExec(final Runnable task) {
+    orderedBgExec.execute(wrapTask(task));
+  }
+
+  public void close() {
+    unsetContext();
+    closed = true;
+  }
+
+  private void unsetContext() {
+    vertx.setContext(null);
+    Thread.currentThread().setContextClassLoader(null);
   }
 
   protected Runnable wrapTask(final Runnable task) {
     return new Runnable() {
       public void run() {
         try {
-          setContext(Context.this);
+          vertx.setContext(Context.this);
           task.run();
         } catch (Throwable t) {
           reportException(t);
+        }
+        if (closed) {
+          // We allow tasks to be run after the context is closed but we make sure we unset the context afterwards
+          // to avoid any leaks
+          unsetContext();
         }
       }
     };

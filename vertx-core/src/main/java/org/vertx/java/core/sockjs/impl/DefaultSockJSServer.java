@@ -20,30 +20,20 @@ import org.vertx.java.core.Handler;
 import org.vertx.java.core.SimpleHandler;
 import org.vertx.java.core.Vertx;
 import org.vertx.java.core.buffer.Buffer;
-import org.vertx.java.core.http.HttpServer;
-import org.vertx.java.core.http.HttpServerRequest;
-import org.vertx.java.core.http.HttpServerResponse;
-import org.vertx.java.core.http.RouteMatcher;
-import org.vertx.java.core.http.ServerWebSocket;
+import org.vertx.java.core.http.*;
 import org.vertx.java.core.http.impl.WebSocketMatcher;
 import org.vertx.java.core.impl.VertxInternal;
 import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.core.logging.impl.LoggerFactory;
-import org.vertx.java.core.sockjs.EventBusBridgeListener;
+import org.vertx.java.core.sockjs.EventBusBridge;
 import org.vertx.java.core.sockjs.SockJSServer;
 import org.vertx.java.core.sockjs.SockJSSocket;
 
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  *
@@ -58,8 +48,6 @@ public class DefaultSockJSServer implements SockJSServer {
   private WebSocketMatcher wsMatcher = new WebSocketMatcher();
   private final Map<String, Session> sessions;
 
-  private EventBusBridgeListener bridgeHook = null;
-
   public DefaultSockJSServer(final VertxInternal vertx, final HttpServer httpServer) {
     this.vertx = vertx;
     this.sessions = vertx.sharedData().getMap("_vertx.sockjssessions");
@@ -69,11 +57,20 @@ public class DefaultSockJSServer implements SockJSServer {
     wsMatcher.noMatch(new Handler<WebSocketMatcher.Match>() {
       Handler<ServerWebSocket> wsHandler = httpServer.websocketHandler();
       public void handle(WebSocketMatcher.Match match) {
-        wsHandler.handle(match.ws);
+        if (wsHandler != null) {
+          wsHandler.handle(match.ws);
+        }
       }
     });
-
-    httpServer.requestHandler(rm);
+    httpServer.requestHandler(new Handler<HttpServerRequest>() {
+      @Override
+      public void handle(HttpServerRequest req) {
+        if (log.isTraceEnabled()) {
+          log.trace("Got request in sockjs server: " + req.uri);
+        }
+        rm.handle(req);
+      }
+    });
     httpServer.websocketHandler(wsMatcher);
   }
 
@@ -81,13 +78,13 @@ public class DefaultSockJSServer implements SockJSServer {
     config = config.copy();
     //Set the defaults
     if (config.getNumber("session_timeout") == null) {
-      config.putNumber("session_timeout", 5l * 60 * 1000);
+      config.putNumber("session_timeout", 5 * 1000); // 5 seconds default
     }
     if (config.getBoolean("insert_JSESSIONID") == null) {
       config.putBoolean("insert_JSESSIONID", true);
     }
     if (config.getNumber("heartbeat_period") == null) {
-      config.putNumber("heartbeat_period", 25l * 1000);
+      config.putNumber("heartbeat_period", 5l * 1000);
     }
     if (config.getNumber("max_bytes_streaming") == null) {
       config.putNumber("max_bytes_streaming", 128 * 1024);
@@ -96,7 +93,7 @@ public class DefaultSockJSServer implements SockJSServer {
       config.putString("prefix", "/");
     }
     if (config.getString("library_url") == null) {
-      config.putString("library_url", "http://cdn.sockjs.org/sockjs-0.2.1.min.js");
+      config.putString("library_url", "http://cdn.sockjs.org/sockjs-0.3.4.min.js");
     }
     if (config.getArray("disabled_transports") == null) {
       config.putArray("disabled_transports", new JsonArray());
@@ -183,23 +180,17 @@ public class DefaultSockJSServer implements SockJSServer {
   }
 
   public void bridge(JsonObject sjsConfig, JsonArray inboundPermitted, JsonArray outboundPermitted) {
-    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted, bridgeHook));
+    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted));
   }
 
   public void bridge(JsonObject sjsConfig, JsonArray inboundPermitted, JsonArray outboundPermitted,
                      long authTimeout) {
-    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted, bridgeHook, authTimeout));
+    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted, authTimeout));
   }
 
   public void bridge(JsonObject sjsConfig, JsonArray inboundPermitted, JsonArray outboundPermitted,
                      long authTimeout, String authAddress) {
-    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted, bridgeHook, authTimeout, authAddress));
-  }
-
-  @Override
-  public SockJSServer setEventBusBridgeListener(EventBusBridgeListener bridgeHook) {
-    this.bridgeHook = bridgeHook;
-    return this;
+    installApp(sjsConfig, new EventBusBridge(vertx, inboundPermitted, outboundPermitted, authTimeout, authAddress));
   }
 
   private Handler<HttpServerRequest> createChunkingTestHandler() {
@@ -433,6 +424,17 @@ public class DefaultSockJSServer implements SockJSServer {
         });
       }
     });
+    installApp(new JsonObject().putString("prefix", "/cookie_needed_echo")
+      .putNumber("max_bytes_streaming", 4096).putBoolean("insert_JSESSIONID", true),
+      new Handler<SockJSSocket>() {
+        public void handle(final SockJSSocket sock) {
+          sock.dataHandler(new Handler<Buffer>() {
+            public void handle(Buffer buff) {
+              sock.writeBuffer(buff);
+            }
+          });
+        }
+      });
 
   }
 

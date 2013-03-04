@@ -1,3 +1,5 @@
+package sendfile;
+
 /*
  * Copyright 2011 the original author or authors.
  *
@@ -16,7 +18,7 @@
 
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.http.HttpServerRequest;
-import org.vertx.java.deploy.Verticle;
+import org.vertx.java.platform.Verticle;
 
 public class SendFileExample extends Verticle {
 

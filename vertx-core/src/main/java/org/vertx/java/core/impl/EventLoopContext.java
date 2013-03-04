@@ -27,8 +27,8 @@ public class EventLoopContext extends Context {
 
   private final NioWorker worker;
 
-  public EventLoopContext(Executor bgExec, NioWorker worker) {
-    super(bgExec);
+  public EventLoopContext(VertxInternal vertx, Executor bgExec, NioWorker worker) {
+    super(vertx, bgExec);
     this.worker = worker;
   }
 
@@ -38,5 +38,9 @@ public class EventLoopContext extends Context {
 
   public NioWorker getWorker() {
     return worker;
+  }
+
+  public boolean isOnCorrectWorker(NioWorker worker) {
+    return this.worker == worker;
   }
 }

@@ -88,5 +88,4 @@ public class LoggerFactory {
   public static void removeLogger(String name) {
     loggers.remove(name);
   }
-
 }

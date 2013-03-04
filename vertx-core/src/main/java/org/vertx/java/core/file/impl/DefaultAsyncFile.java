@@ -82,7 +82,7 @@ public class DefaultAsyncFile implements AsyncFile {
     closeInternal(null);
   }
 
-  public void close(AsyncResultHandler handler) {
+  public void close(AsyncResultHandler<Void> handler) {
     closeInternal(handler);
   }
 
@@ -192,7 +192,7 @@ public class DefaultAsyncFile implements AsyncFile {
             read(buff, 0, pos, BUFFER_SIZE, new AsyncResultHandler<Buffer>() {
 
               public void handle(AsyncResult<Buffer> ar) {
-                if (ar.exception == null) {
+                if (ar.succeeded()) {
                   readInProgress = false;
                   Buffer buffer = ar.result;
                   if (buffer.length() == 0) {
@@ -277,11 +277,11 @@ public class DefaultAsyncFile implements AsyncFile {
     doFlush(null);
   }
 
-  public void flush(AsyncResultHandler handler) {
+  public void flush(AsyncResultHandler<Void> handler) {
     doFlush(handler);
   }
 
-  private void doFlush(AsyncResultHandler handler) {
+  private void doFlush(AsyncResultHandler<Void> handler) {
     checkClosed();
     checkContext();
     new BlockingAction<Void>(vertx, handler) {
@@ -315,7 +315,7 @@ public class DefaultAsyncFile implements AsyncFile {
           context.execute(new Runnable() {
             public void run() {
               writesOutstanding -= buff.limit();
-              handler.handle(new AsyncResult<>((Void) null));
+              new AsyncResult<Void>().setResult(null).setHandler(handler);
             }
           });
         }
@@ -326,7 +326,7 @@ public class DefaultAsyncFile implements AsyncFile {
           final Exception e = (Exception) exc;
           context.execute(new Runnable() {
             public void run() {
-              handler.handle(new AsyncResult(e));
+              new AsyncResult<Void>().setFailure(e).setHandler(handler);
             }
           });
         } else {
@@ -342,12 +342,14 @@ public class DefaultAsyncFile implements AsyncFile {
 
       int pos = position;
 
+      final AsyncResult<Buffer> result = new AsyncResult<>();
+
       private void done() {
         context.execute(new Runnable() {
           public void run() {
             buff.flip();
             writeBuff.setBytes(offset, buff);
-            handler.handle(new AsyncResult<>(writeBuff));
+            result.setResult(writeBuff).setHandler(handler);
           }
         });
       }
@@ -372,7 +374,7 @@ public class DefaultAsyncFile implements AsyncFile {
           final Exception e = (Exception) exc;
           context.execute(new Runnable() {
             public void run() {
-              handler.handle(new AsyncResult(e));
+              result.setFailure(e).setHandler(handler);
             }
           });
         } else {
@@ -394,19 +396,19 @@ public class DefaultAsyncFile implements AsyncFile {
   }
 
   private void checkContext() {
-    if (!Context.getContext().equals(context)) {
+    if (!vertx.getContext().equals(context)) {
       throw new IllegalStateException("AsyncFile must only be used in the context that created it, expected: "
-          + context + " actual " + Context.getContext());
+          + context + " actual " + vertx.getContext());
     }
   }
 
   private void doClose(AsyncResultHandler<Void> handler) {
-    AsyncResult<Void> res;
+    AsyncResult<Void> res = new AsyncResult<>();
     try {
       ch.close();
-      res = new AsyncResult<>((Void)null);
+      res.setResult(null);
     } catch (IOException e) {
-      res = new AsyncResult<Void>(e);
+      res.setFailure(e);
     }
     if (handler != null) {
       handler.handle(res);

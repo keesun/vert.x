@@ -16,6 +16,8 @@
 
 package org.vertx.java.core.impl;
 
+import org.jboss.netty.channel.socket.nio.NioWorker;
+
 import java.util.concurrent.Executor;
 
 /**
@@ -23,11 +25,15 @@ import java.util.concurrent.Executor;
  */
 public class WorkerContext extends Context {
 
-  public WorkerContext(Executor bgExec) {
-    super(bgExec);
+  public WorkerContext(VertxInternal vertx, Executor orderedBgExec) {
+    super(vertx, orderedBgExec);
   }
 
   public void execute(Runnable task) {
-    super.executeOnWorker(task);
+    executeOnOrderedWorkerExec(wrapTask(task));
+  }
+
+  public boolean isOnCorrectWorker(NioWorker worker) {
+    return false;
   }
 }

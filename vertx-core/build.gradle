@@ -28,3 +28,35 @@ dependencies {
 artifacts {
 	platform jar
 }
+
+sourceSets {
+  test {
+    resources {
+      srcDirs "../src/dist/conf"
+    }
+  }
+}
+
+test {
+  outputs.upToDateWhen { false }
+
+  testLogging.showStandardStreams = true
+
+  systemProperty 'vertx.test.timeout', 60
+
+  jvmArgs '-server', '-Xms128m', '-Xmx1024m', '-XX:MaxPermSize=128m', '-XX:NewRatio=2'
+
+  testLogging { exceptionFormat "full" }
+}
+
+task collectDeps(type: Copy) {
+  destinationDir = file("build/deps")
+  into("compile") {
+    from configurations.compile
+    exclude "vertx-*.jar"
+  }
+  into("test") {
+    from configurations.testCompile
+    exclude "vertx-*.jar"
+  }
+}
